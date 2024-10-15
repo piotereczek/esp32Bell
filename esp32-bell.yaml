@@ -20,11 +20,7 @@ logger:
 # Enable Home Assistant API
 api:
   reboot_timeout: 0s
-#mqtt:
- # broker: 956312d423474c42bbb79133bd17dd5d.s1.eu.hivemq.cloud
- # port: 8883
- # username: kasiarz
-  #password: AnetaPiotr33
+
  
 ota:
   - platform: esphome
