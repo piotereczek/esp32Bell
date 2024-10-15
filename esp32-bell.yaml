@@ -1,0 +1,220 @@
+substitutions:
+  device_name: esp32-bell
+  friendly_name: ESP32-Bell
+esphome:
+  name: $device_name
+  
+    # ...
+  on_boot:
+    then:
+      ds1307.read_time:
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  reboot_timeout: 0s
+#mqtt:
+ # broker: 956312d423474c42bbb79133bd17dd5d.s1.eu.hivemq.cloud
+ # port: 8883
+ # username: kasiarz
+  #password: AnetaPiotr33
+ 
+ota:
+  - platform: esphome
+  - platform: http_request
+
+http_request:
+  verify_ssl: false
+  
+captive_portal:
+
+wifi:
+  networks:
+  - ssid: !secret wifi_ssid
+    password: !secret wifi_password
+  - ssid: !secret wifi_ssid_glass
+    password: !secret wifi_password_glass
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Wemos-Antena Hotspot"
+    password: "12345678"
+    #ap_timeout: 0s
+
+web_server:
+  port: 80
+  local: true
+
+text_sensor:
+  - platform: template
+    name: "Current time"
+    lambda: |-
+      char str[20];
+      time_t currTime = id(ds1307_time).now().timestamp;
+      strftime(str, sizeof(str), "%m/%d/%Y %l:%M %p", localtime(&currTime)); // Użyj formatu amerykańskiego dla daty (MM/DD/YYYY)
+      return  { str };
+    update_interval: 60s
+  - platform: template
+    name: $friendly_name Uptime
+    id: uptime_human
+    icon: mdi:clock-start
+    internal: False
+  - platform: wifi_info
+    ip_address:
+      name: ESP IP Address
+
+sensor:
+  - platform: wifi_signal # Reports the WiFi signal strength/RSSI in dB
+    name: "WiFi Signal dB"
+    id: wifi_signal_db
+    update_interval: 60s
+    entity_category: "diagnostic"
+
+  - platform: copy # Reports the WiFi signal strength in %
+    source_id: wifi_signal_db
+    name: "WiFi Signal Percent"
+    filters:
+      - lambda: return min(max(2 * (x + 100.0), 0.0), 100.0);
+    unit_of_measurement: "Signal %"
+    entity_category: "diagnostic"
+    device_class: ""
+  - platform: uptime
+    name: $friendly_name Uptime
+    id: uptime_sensor
+    update_interval: 60s
+    on_raw_value:
+      then:
+        - text_sensor.template.publish:
+            id: uptime_human
+            # Custom C++ code to generate the result
+            state: !lambda |-
+              int seconds = round(id(uptime_sensor).raw_state);
+              int days = seconds / (24 * 3600);
+              seconds = seconds % (24 * 3600);
+              int hours = seconds / 3600;
+              seconds = seconds % 3600;
+              int minutes = seconds /  60;
+              seconds = seconds % 60;
+              return (
+                (days ? to_string(days) + "d " : "") +
+                (hours ? to_string(hours) + "h " : "") +
+                (minutes ? to_string(minutes) + "m " : "") +
+                (to_string(seconds) + "s")
+              ).c_str();
+
+
+
+##### DISPLAY #####
+
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+
+display:
+  platform: tm1637
+  clk_pin: GPIO18
+  dio_pin: GPIO19
+  update_interval: 500ms
+  lambda: |-
+      static int i = 0;
+      i++;
+      if ((i % 2) == 0)
+        it.strftime("%l.%M", id(ds1307_time).now());
+        else
+        it.strftime("%l%M", id(ds1307_time).now());
+
+switch:
+  - platform: gpio
+    name: "Relay"
+    pin: GPIO05
+    id: relay
+  - platform: restart
+    id: device_restart
+    name: "Restart"
+    internal: true
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO0
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Button GPIO0"
+    id: Button_gpio0
+    on_press:
+      then:
+        - switch.toggle: relay
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: CST6CDT,M3.2.0,M11.1.0
+    on_time_sync:
+      then:
+        # ... and update the RTC when the synchronization was successful
+        ds1307.write_time:
+  - platform: ds1307
+    id: ds1307_time
+    address: 0x68
+    timezone: CST6CDT,M3.2.0,M11.1.0
+    update_interval: never
+    on_time:
+      - seconds: 0
+        minutes: 0
+        hours: 7
+        days_of_week: MON-FRI
+        then:
+          - switch.turn_on: relay
+          - delay: 15s
+          - switch.turn_off: relay
+      - seconds: 0
+        minutes: 0
+        hours: 12
+        days_of_week: MON-FRI
+        then:
+          - switch.turn_on: relay
+          - delay: 15s
+          - switch.turn_off: relay
+      - seconds: 0
+        minutes: 30
+        hours: 12
+        days_of_week: MON-FRI
+        then:
+          - switch.turn_on: relay
+          - delay: 15s
+          - switch.turn_off: relay
+      - seconds: 0
+        minutes: 0
+        hours: 17
+        days_of_week: MON-FRI
+        then:
+          - switch.turn_on: relay
+          - delay: 15s
+          - switch.turn_off: relay
+      - at: '00:00:00'
+        then:
+          - switch.turn_on: device_restart
+
+
+button:
+  - platform: restart
+    name: "Restart"
+    internal: False
+  - platform: template
+    id: update_firmware
+    name: Update Firmware
+    entity_category: "config"
+    icon: mdi:update
+    # disabled_by_default: true
+    on_press: 
+      then:
+        - ota.http_request.flash:
+            md5_url: https://github.com/piotereczek/esp32Bell/raw/refs/heads/main/esp32-bell.ota.bin.md5
+            url: https://github.com/piotereczek/esp32Bell/raw/refs/heads/main/esp32-bell.ota.bin
